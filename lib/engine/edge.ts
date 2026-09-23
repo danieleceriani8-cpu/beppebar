@@ -1,16 +1,18 @@
-// Confronta probabilità del modello con quote reali, seleziona le giocate con
-// margine sufficiente. Se nessuna lo supera: sempre NO BET.
+// Selezione delle giocate: confronto probabilità modello vs quota reale.
+// Regole: max 3 selezioni, max 10 crediti al giorno, niente rincorsa alle
+// perdite, nessuna correlazione forte fra le selezioni, NO BET sempre possibile.
 
-import { Fixture, OddsQuote, TicketPick, DailyTicket } from "@/lib/types";
+import { DailyTicket, Fixture, OddsQuote, TicketPick } from "@/lib/types";
 import { estimateFixture } from "./model";
+import { buildAnalysis, buildNoBetNote } from "./narrative";
 
-const MIN_EDGE = 0;
+const MIN_EDGE = Number(process.env.MIN_EDGE_PERCENT ?? 4);
 const BUDGET = Number(process.env.DAILY_CREDITS_BUDGET ?? 10);
 const MAX_PICKS = Number(process.env.MAX_PICKS_PER_DAY ?? 3);
 
-function impliedProbability(odds: number): number {
-  return (1 / odds) * 100;
-}
+// Quote troppo basse o troppo alte: il valore teorico è illusorio.
+const MIN_ODDS = 1.25;
+const MAX_ODDS = 4.5;
 
 function confidenceLabel(edge: number): TicketPick["confidence"] {
   if (edge >= 9) return "alta";
@@ -19,63 +21,108 @@ function confidenceLabel(edge: number): TicketPick["confidence"] {
   return "bassa";
 }
 
-function buildWhy(fixture: Fixture): string[] {
-  const notes: string[] = [];
-  const h = fixture.home, a = fixture.away;
-  if (h.xg > a.xg) notes.push(`${h.teamName} produce più occasioni pericolose (xG superiore)`);
-  if (h.restDays - a.restDays >= 2) notes.push(`${h.teamName} arriva con più giorni di riposo`);
-  if (a.keyAbsences.length >= 2) notes.push(`${a.teamName} ha diverse assenze chiave`);
-  if (notes.length === 0) notes.push("Vantaggio statistico moderato ma coerente su più indicatori");
-  return notes.slice(0, 3);
-}
-
-function buildRisks(fixture: Fixture): string[] {
-  const risks: string[] = [];
-  const h = fixture.home, a = fixture.away;
-  if (h.keyAbsences.length > 0) risks.push(`${h.teamName}: assenze da verificare in formazione ufficiale`);
-  if (h.restDays <= 3) risks.push(`${h.teamName} ha avuto poco riposo`);
-  if (a.xg > h.xg * 0.9) risks.push(`${a.teamName} resta pericolosa in ripartenza`);
-  if (risks.length === 0) risks.push("Formazioni ufficiali non ancora confermate al momento dell'analisi");
-  return risks.slice(0, 3);
-}
-
-export function buildDailyTicket(dateISO: string, fixtures: Fixture[], odds: OddsQuote[]): DailyTicket {
+export function buildDailyTicket(
+  dateISO: string,
+  fixtures: Fixture[],
+  odds: OddsQuote[],
+  meta: {
+    dataSource: string;
+    oddsSource: string;
+    capitalBefore: number;
+    dayIndex: number;
+    notices?: string[];
+  }
+): DailyTicket {
   const candidates: TicketPick[] = [];
+  const discarded: DailyTicket["scan"]["discarded"] = [];
+  let marketsEvaluated = 0;
+  let best: { match: string; market: string; edge: number } | null = null;
 
   for (const fixture of fixtures) {
     const estimates = estimateFixture(fixture);
     const fixtureOdds = odds.filter((o) => o.fixtureId === fixture.fixtureId);
+    const matchName = `${fixture.home.teamName} — ${fixture.away.teamName}`;
 
     for (const quote of fixtureOdds) {
       const estimate = estimates.find((e) => e.market === quote.market);
       if (!estimate) continue;
+      marketsEvaluated++;
 
-      const implied = impliedProbability(quote.price);
+      const implied = (1 / quote.price) * 100;
       const edge = estimate.modelProbability - implied;
+
+      if (!best || edge > best.edge) {
+        best = { match: matchName, market: estimate.label, edge };
+      }
+
+      if (quote.price < MIN_ODDS || quote.price > MAX_ODDS) {
+        if (edge >= MIN_EDGE) {
+          discarded.push({
+            match: matchName,
+            market: estimate.label,
+            edge: r1(edge),
+            reason:
+              quote.price < MIN_ODDS
+                ? `quota ${quote.price.toFixed(2)} troppo bassa: il rischio non è remunerato`
+                : `quota ${quote.price.toFixed(2)} troppo alta: varianza eccessiva per un budget da 10 crediti`,
+          });
+        }
+        continue;
+      }
+
       if (edge < MIN_EDGE) continue;
 
       candidates.push({
         fixtureId: fixture.fixtureId,
         league: fixture.league,
-        match: `${fixture.home.teamName} — ${fixture.away.teamName}`,
+        leagueLabel: fixture.leagueLabel,
+        match: matchName,
+        kickoff: fixture.kickoff,
         market: quote.market,
-        label: quote.label,
+        label: estimate.label,
         odds: quote.price,
         bookmaker: quote.bookmaker,
         modelProbability: estimate.modelProbability,
-        impliedProbability: Math.round(implied * 10) / 10,
-        edgePoints: Math.round(edge * 10) / 10,
+        impliedProbability: r1(implied),
+        edgePoints: r1(edge),
+        fairOdds: Math.round((100 / estimate.modelProbability) * 100) / 100,
         confidence: confidenceLabel(edge),
         credits: 0,
-        why: buildWhy(fixture),
-        risks: buildRisks(fixture),
+        analysis: buildAnalysis(fixture, quote, estimate.modelProbability, edge),
         quoteFetchedAt: quote.fetchedAt,
       });
     }
   }
 
   candidates.sort((a, b) => b.edgePoints - a.edgePoints);
-  const picks = candidates.slice(0, MAX_PICKS);
+
+  // Una sola selezione per partita: evita giocate correlate sullo stesso match.
+  const picks: TicketPick[] = [];
+  const usedFixtures = new Set<string>();
+  for (const c of candidates) {
+    if (picks.length >= MAX_PICKS) break;
+    if (usedFixtures.has(c.fixtureId)) {
+      discarded.push({
+        match: c.match,
+        market: c.label,
+        edge: c.edgePoints,
+        reason: "scartata per correlazione: c'è già una selezione su questa partita",
+      });
+      continue;
+    }
+    usedFixtures.add(c.fixtureId);
+    picks.push(c);
+  }
+
+  const scan = {
+    fixturesAnalyzed: fixtures.length,
+    marketsEvaluated,
+    candidatesAboveThreshold: candidates.length,
+    minEdgeRequired: MIN_EDGE,
+    dataSource: meta.dataSource,
+    oddsSource: meta.oddsSource,
+    discarded: discarded.slice(0, 6),
+  };
 
   if (picks.length === 0) {
     return {
@@ -86,31 +133,44 @@ export function buildDailyTicket(dateISO: string, fixtures: Fixture[], odds: Odd
       totalCreditsUsed: 0,
       theoreticalCombinedOdds: null,
       theoreticalReturn: null,
-      note: "Nessuna partita ha superato la soglia minima di margine statistico oggi. Beppe preferisce non forzare un'idea che non c'è.",
+      note: buildNoBetNote(fixtures.length, marketsEvaluated, best, MIN_EDGE),
+      scan,
+      capitalBefore: meta.capitalBefore,
+      dayIndex: meta.dayIndex,
     };
   }
 
+  // Allocazione crediti proporzionale al margine, mai oltre il budget del giorno.
   const edgeSum = picks.reduce((s, p) => s + p.edgePoints, 0);
   let allocated = 0;
   picks.forEach((p, i) => {
-    const share = p.edgePoints / edgeSum;
-    let credits = Math.round(BUDGET * share);
-    if (i === picks.length - 1) credits = BUDGET - allocated;
-    p.credits = Math.max(1, credits);
-    allocated += p.credits;
+    let credits =
+      i === picks.length - 1
+        ? BUDGET - allocated
+        : Math.max(1, Math.round((BUDGET * p.edgePoints) / edgeSum));
+    credits = Math.max(1, credits);
+    p.credits = credits;
+    allocated += credits;
   });
 
   const combinedOdds = picks.reduce((acc, p) => acc * p.odds, 1);
-  const theoreticalReturn = Math.round(BUDGET * combinedOdds * 100) / 100;
+  const singlesReturn = picks.reduce((s, p) => s + p.credits * p.odds, 0);
 
   return {
     date: dateISO,
     generatedAt: new Date().toISOString(),
     status: "picks",
     picks,
-    totalCreditsUsed: BUDGET,
+    totalCreditsUsed: picks.reduce((s, p) => s + p.credits, 0),
     theoreticalCombinedOdds: Math.round(combinedOdds * 100) / 100,
-    theoreticalReturn,
-    note: "Analisi statistica ed editoriale. Crediti virtuali, nessuna giocata reale eseguita.",
+    theoreticalReturn: Math.round(singlesReturn * 100) / 100,
+    note:
+      `Selezionate ${picks.length} giocate su ${marketsEvaluated} mercati analizzati in ${fixtures.length} partite. ` +
+      `Crediti virtuali, nessuna scommessa reale eseguita.`,
+    scan,
+    capitalBefore: meta.capitalBefore,
+    dayIndex: meta.dayIndex,
   };
 }
+
+const r1 = (n: number) => Math.round(n * 10) / 10;

@@ -3,19 +3,26 @@
 export type TeamForm = {
   teamId: string;
   teamName: string;
-  recentResults: number[];
-  goalsFor: number;
-  goalsAgainst: number;
+  recentResults: number[]; // 3 = vittoria, 1 = pari, 0 = sconfitta (dal più recente)
+  goalsFor: number;        // media gol fatti
+  goalsAgainst: number;    // media gol subiti
   xg: number;
   xga: number;
   homeAway: "home" | "away";
   restDays: number;
   keyAbsences: string[];
+  // Contesto extra usato dall'analisi approfondita
+  matchesPlayed: number;
+  cleanSheetRate: number;  // 0-1
+  scoringRate: number;     // 0-1, quota partite in cui segna
+  bttsRate: number;        // 0-1
+  over25Rate: number;      // 0-1
 };
 
 export type Fixture = {
   fixtureId: string;
   league: string;
+  leagueLabel: string;
   kickoff: string;
   home: TeamForm;
   away: TeamForm;
@@ -37,10 +44,22 @@ export type ModelEstimate = {
   modelProbability: number;
 };
 
+export type AnalysisBlock = {
+  headline: string;
+  paragraphs: string[];
+  dataPoints: { label: string; value: string; read: string }[];
+  scenario: { label: string; probability: number }[];
+  why: string[];
+  risks: string[];
+  verdict: string;
+};
+
 export type TicketPick = {
   fixtureId: string;
   league: string;
+  leagueLabel: string;
   match: string;
+  kickoff: string;
   market: string;
   label: string;
   odds: number;
@@ -48,10 +67,10 @@ export type TicketPick = {
   modelProbability: number;
   impliedProbability: number;
   edgePoints: number;
+  fairOdds: number;
   confidence: "alta" | "medio-alta" | "media" | "bassa";
   credits: number;
-  why: string[];
-  risks: string[];
+  analysis: AnalysisBlock;
   quoteFetchedAt: string;
 };
 
@@ -64,6 +83,18 @@ export type DailyTicket = {
   theoreticalCombinedOdds: number | null;
   theoreticalReturn: number | null;
   note: string;
+  // Trasparenza: cosa ha guardato Beppe prima di decidere
+  scan: {
+    fixturesAnalyzed: number;
+    marketsEvaluated: number;
+    candidatesAboveThreshold: number;
+    minEdgeRequired: number;
+    dataSource: string;
+    oddsSource: string;
+    discarded: { match: string; market: string; edge: number; reason: string }[];
+  };
+  capitalBefore: number;
+  dayIndex: number;
 };
 
 export type HistoryDay = {

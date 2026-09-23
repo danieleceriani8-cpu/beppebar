@@ -1,13 +1,19 @@
+// Diagnostica: dice a colpo d'occhio cosa vede davvero il runtime di Vercel.
+export const dynamic = "force-dynamic";
+
 export async function GET() {
-return Response.json({
-FOOTBALL_LENGTH: process.env.FOOTBALL_API_KEY?.length ?? null,
-ODDS_LENGTH: process.env.ODDS_API_KEY?.length ?? null,
-CRON_LENGTH: process.env.CRON_SECRET?.length ?? null,
- 
-KV_URL_EXISTS: !!process.env.KV_REST_API_URL,
-KV_TOKEN_EXISTS: !!process.env.KV_REST_API_TOKEN,
- 
-KV_URL_LENGTH: process.env.KV_REST_API_URL?.length ?? 0,
-KV_TOKEN_LENGTH: process.env.KV_REST_API_TOKEN?.length ?? 0,
-});
+  return Response.json({
+    FOOTBALL_DATA_API_KEY: len(process.env.FOOTBALL_DATA_API_KEY),
+    ODDS_API_KEY: len(process.env.ODDS_API_KEY),
+    OPENAI_API_KEY: len(process.env.OPENAI_API_KEY),
+    CRON_SECRET: len(process.env.CRON_SECRET),
+    MIN_EDGE_PERCENT: process.env.MIN_EDGE_PERCENT ?? "(default 4)",
+    DAILY_CREDITS_BUDGET: process.env.DAILY_CREDITS_BUDGET ?? "(default 10)",
+    MAX_PICKS_PER_DAY: process.env.MAX_PICKS_PER_DAY ?? "(default 3)",
+    nota: "Nessuna variabile è obbligatoria: senza chiavi il sito gira comunque in modalità fallback.",
+  });
+}
+
+function len(v?: string) {
+  return v ? `ok (${v.length} caratteri)` : "assente";
 }

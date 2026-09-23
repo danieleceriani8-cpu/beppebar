@@ -1,12 +1,23 @@
-import { getTicket, getCurrentCapital, getHistory } from "@/lib/store";
+// Lo scontrino letto dalla home. Se non esiste, viene generato al volo:
+// così la pagina non è mai vuota, anche senza cron e senza database.
 
-export async function GET() {
-  const today = new Date().toISOString().slice(0, 10);
-  const [ticket, capital, history] = await Promise.all([
-    getTicket(today),
-    getCurrentCapital(),
-    getHistory(10),
-  ]);
+import { generateForDate, todayISO } from "@/lib/daily";
+import { getHistory, getCurrentCapital, getStartCapital } from "@/lib/store";
 
-  return Response.json({ date: today, ticket, capital, history });
+export const dynamic = "force-dynamic";
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const date = url.searchParams.get("date") ?? todayISO();
+
+  const ticket = await generateForDate(date);
+  const history = await getHistory(14);
+  const capital = await getCurrentCapital();
+
+  return Response.json({
+    ticket,
+    history,
+    capital,
+    startCapital: getStartCapital(),
+  });
 }

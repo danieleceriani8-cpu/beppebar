@@ -1,51 +1,113 @@
-# Beppe Bar — versione con provider gratuiti
+# Beppe Bar
 
-Provider dati **gratuiti**, scelti per restare dentro i limiti con 4 campionati
-e massimo 2-3 giocate al giorno.
+Analisi statistiche sul calcio. 100 crediti virtuali, massimo 10 al giorno,
+massimo 3 selezioni. Se il valore non c'è, Beppe non gioca.
 
-**Il logo è un placeholder** da rifare (in `components/Logo.tsx`).
+---
 
-## Tornei monitorati (4)
-Serie A, Premier League, La Liga, Champions League.
-Esclusi: Serie B (xG spesso assente nei piani free), Championship (troppe
-partite/settimana), Europa League (si sovrappone alla Champions).
+## La regola numero uno di questa versione
 
-## Provider
-- **Statistiche/calendario**: [API-Football](https://www.api-football.com) — 100 richieste/giorno gratis, nessuna carta richiesta
-- **Quote reali**: [OddsPapi](https://oddspapi.io) — 250 richieste/mese gratis, 350+ bookmaker
+**Il sito funziona anche senza nessuna chiave API e senza nessun database.**
 
-## Come attivarlo
+È la lezione della prima versione: KV non veniva iniettato nel runtime,
+API-Football bloccava la stagione corrente e tutto il sito andava giù.
+Qui nessun provider può far esplodere la pagina:
 
-### 1. Chiavi API
-- `FOOTBALL_API_KEY` da api-football.com
-- `ODDS_API_KEY` da oddspapi.io
+| Componente | Se configurato | Se NON configurato |
+|---|---|---|
+| Statistiche | football-data.org | dataset interno deterministico |
+| Quote | the-odds-api.com | mercato simulato con margine bookmaker realistico |
+| Database | — | cache in memoria + rigenerazione deterministica per data |
+| Chat AI | rimossa in questa versione | — |
 
-### 2. Storage (Vercel KV)
-Dashboard Vercel → **Storage → Create Database → KV** → collega al progetto.
-Vercel imposta da solo `KV_REST_API_URL` e `KV_REST_API_TOKEN`.
+La home dichiara sempre, in chiaro, quale fonte ha usato.
 
-### 3. Chat (opzionale)
-`OPENAI_API_KEY` da platform.openai.com
+---
 
-### 4. Variabili d'ambiente su Vercel
-Settings → Environment Variables → aggiungi tutte quelle sopra + `CRON_SECRET` (una password a tua scelta).
+## Deploy (5 minuti, zero configurazione)
 
-### 5. Deploy
-1. Carica la cartella su GitHub (repository nuovo)
-2. Vercel → Add New → Project → importa il repository
-3. Verifica che le Environment Variables siano impostate
-4. Deploy
+1. Copia tutti questi file nel repository `beppebar` (sostituendo i vecchi).
+2. `git add . && git commit -m "beppe bar v1" && git push`
+3. Vercel fa il deploy da solo.
+4. Apri il sito. Deve già funzionare.
 
-### 6. Test manuale
-```
-curl -H "Authorization: Bearer TUO_CRON_SECRET" https://tuo-dominio.vercel.app/api/daily
-```
+**Non serve aggiungere nessuna variabile d'ambiente.**
+Quelle vecchie (`KV_*`, `REDIS_URL`, `FOOTBALL_API_KEY`, `OPENAI_API_KEY`)
+puoi cancellarle: non vengono più lette da nessun file.
 
-Il cron in `vercel.json` gira automaticamente ogni giorno alle 10:00 UTC (~12:00 italiane).
+---
 
-## Importante
-- Non esegue giocate reali, non gestisce denaro reale
-- Se il margine statistico non c'è: risponde NO BET
-- Il mapping in `lib/providers/api-football.ts` è basato sulla struttura tipica
-  della risposta ufficiale, ma va verificato con una chiamata reale prima di
-  fidarsene al 100%: alcuni campi potrebbero avere nomi leggermente diversi
+## Attivare i dati reali (quando vuoi, non ora)
+
+1. Chiave gratuita su football-data.org → variabile `FOOTBALL_DATA_API_KEY`
+2. Chiave gratuita su the-odds-api.com → variabile `ODDS_API_KEY`
+3. Redeploy.
+
+Il sito passa ai dati reali da solo e lo scrive nella sezione "Come ci sono arrivato".
+Se la chiave scade o finisce la quota giornaliera, torna in automatico al fallback
+invece di andare in errore.
+
+---
+
+## Endpoint
+
+| URL | Cosa fa |
+|---|---|
+| `/` | la home: schedina del giorno, analisi, trasparenza, storico |
+| `/api/daily` | genera lo scontrino (lo chiama il cron alle 12:00 italiane) |
+| `/api/daily?force=1` | rigenera forzando il ricalcolo |
+| `/api/ticket` | lo scontrino in JSON |
+| `/api/debug` | dice quali variabili vede il runtime |
+
+Se imposti `CRON_SECRET`, l'endpoint `/api/daily` accetta
+`Authorization: Bearer <secret>` oppure `?key=<secret>`.
+Se non lo imposti, resta aperto e funziona dal browser.
+
+---
+
+## Come ragiona il motore
+
+1. **Reti attese**: attacco × difesa avversaria, riportato alla media del torneo,
+   poi corretto per fattore campo, forma recente (pesata), giorni di riposo, assenze.
+2. **Matrice di Poisson 8×8**: da lì escono tutte le probabilità di mercato
+   (1X2, doppia chance, DNB, Over/Under, Goal, clean sheet, risultati esatti).
+3. **Confronto con la quota**: margine = probabilità modello − probabilità implicita.
+4. **Filtri di disciplina**:
+   - margine minimo `MIN_EDGE_PERCENT` (default 5 punti)
+   - quote fuori dal range 1,25 – 4,50 scartate
+   - una sola selezione per partita (niente giocate correlate)
+   - massimo 3 selezioni, massimo 10 crediti al giorno
+   - budget allocato in proporzione al margine, mai rincorsa alle perdite
+5. **NO BET**: se nessun mercato supera la soglia, Beppe spiega quale era
+   la selezione più vicina e di quanto ha mancato la soglia.
+
+## Le analisi
+
+Ogni giocata produce:
+
+- un titolo che sintetizza la tesi
+- quattro paragrafi discorsivi, ognuno ancorato a numeri calcolati davvero
+- una tabella di sei indicatori, ognuno con la sua **lettura** (non solo il dato)
+- i quattro risultati esatti più probabili con relativa percentuale
+- perché si gioca / cosa può andare storto
+- il verdetto con quota equa, quota di mercato e margine in punti
+
+Nessun numero è decorativo: arrivano tutti dalla matrice del modello.
+
+---
+
+## Parametri
+
+| Variabile | Default | Cosa fa |
+|---|---|---|
+| `DAILY_CREDITS_BUDGET` | 10 | crediti massimi al giorno |
+| `MIN_EDGE_PERCENT` | 5 | margine minimo per giocare |
+| `MAX_PICKS_PER_DAY` | 3 | selezioni massime |
+
+---
+
+## Avvertenze
+
+Crediti virtuali. Nessuna scommessa reale, nessun denaro movimentato,
+nessun collegamento a conti di gioco. Beppe è una simulazione statistica:
+le probabilità non sono garanzie. Il gioco può causare dipendenza patologica. 18+.
