@@ -4,7 +4,7 @@
 import { Fixture, OddsQuote, TicketPick, DailyTicket } from "@/lib/types";
 import { estimateFixture } from "./model";
 
-const MIN_EDGE = Number(process.env.MIN_EDGE_PERCENT ?? 4);
+const MIN_EDGE = 0;
 const BUDGET = Number(process.env.DAILY_CREDITS_BUDGET ?? 10);
 const MAX_PICKS = Number(process.env.MAX_PICKS_PER_DAY ?? 3);
 
